@@ -1,0 +1,44 @@
+---
+apiVersion: "v1"
+kind: "Pod"
+metadata:
+  labels:
+    jenkins: "agent"
+    job: "efd"
+spec:
+  containers:
+    - command:
+        - "cat"
+      image: "golang:1.16"
+      imagePullPolicy: "IfNotPresent"
+      name: "golang"
+      resources:
+        limits:
+          memory: "512Mi"
+          cpu: "400m"
+        requests:
+          memory: "512Mi"
+          cpu: "400m"
+      securityContext:
+        privileged: false
+        runAsUser: 1000
+        runAsGroup: 1000
+      tty: true
+    - command:
+        - "cat"
+      image: "golangci/golangci-lint:v1.25"
+      imagePullPolicy: "IfNotPresent"
+      name: "golangci-lint"
+      resources:
+        limits:
+          memory: "512Mi"
+          cpu: "400m"
+        requests:
+          memory: "512Mi"
+          cpu: "400"
+      securityContext:
+        privileged: false
+        runAsUser: 1000
+        runAsGroup: 1000
+      tty: true
+  restartPolicy: "Never"
