@@ -1,0 +1,54 @@
+---
+archives:
+  - name_template: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}'
+    replacements:
+      darwin: Darwin
+      linux: Linux
+      windows: Windows
+      amd64: x86_64
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.adoc
+      - LICENSE
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod download
+
+builds:
+  - id: updatecli
+    main: ./main.go
+    binary: updatecli
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+changelog:
+  ## Delegate Changelog to release-drafter
+  skip: true
+
+env:
+  - GO111MODULE=on
+  - CGO_ENABLED=0
+
+nfpms:
+  - file_name_template: '{{ .ProjectName }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}'
+    homepage: 'https://github.com/jenkins-infra/efd'
+    description: 'efd is a small utility to get the main email address of every member of a Discourse group.'
+    maintainer: 'Olivier Vernin <olivier@vernin.me>'
+    license: 'MIT'
+    vendor: jenkins-infra
+    formats:
+      - apk
+      - deb
+      - rpm
+
+snapshot:
+  name_template: "{{ .Tag }}-next"
