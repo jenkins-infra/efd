@@ -38,101 +38,133 @@ type DiscourseClient struct {
 }
 
 // GetGroupMembers return all userID for a specific discourse group
-func (d *DiscourseClient) GetGroupMembers(group string) (members []string, err error) {
+func (d *DiscourseClient) GetGroupMembers(group string) ([]string, error) {
 	type groupMember struct {
 		Id       int
 		Username string
 		Name     string
 	}
 
+	type meta struct {
+		Total  int
+		Limit  int
+		Offset int
+	}
+
 	type jsonResponse struct {
 		Members []groupMember
 		Errors  []string
+		Meta    meta
 	}
 
-	logrus.Debugf("Fetching group %q information", group)
+	queryOffset := 0
+	queryLimit := 50
+	allQueryDone := false
+	members := []string{}
 
-	url := fmt.Sprintf("https://%s/groups/%s/members.json", d.Endpoint, group)
+	failureCounter := 0
 
-	client := http.Client{}
-	req, err := http.NewRequest("GET", url, nil)
+	// Ensure we either browse every pages returned by Discourse api or exit after 10 errors
+	for failureCounter < MaxQueryFailure && !allQueryDone {
 
-	if err != nil {
-		return members, err
-	}
+		logrus.Debugf("Fetching group %q information", group)
 
-	req.Header = http.Header{
-		"Api-Key":       []string{d.ApiKey},
-		"Api-Username":  []string{d.ApiUsername},
-		"Content-Type":  []string{HTTPHeaderContentType},
-		"Authorization": []string{HTTPHeaderAuthorization},
-	}
+		url := fmt.Sprintf("https://%s/groups/%s/members.json?limit=%d&offset=%d", d.Endpoint, group, queryLimit, queryOffset)
 
-	for i := 0; i < MaxQueryFailure; i++ {
-		lastTry := (i == MaxQueryFailure)
+		logrus.Debugln(url)
+
+		client := http.Client{}
+		req, err := http.NewRequest("GET", url, nil)
+
+		if err != nil {
+			failureCounter++
+			continue
+		}
+
+		req.Header = http.Header{
+			"Api-Key":       []string{d.ApiKey},
+			"Api-Username":  []string{d.ApiUsername},
+			"Content-Type":  []string{HTTPHeaderContentType},
+			"Authorization": []string{HTTPHeaderAuthorization},
+		}
 
 		jResp := jsonResponse{}
 
 		resp, err := client.Do(req)
 
 		if err != nil {
-			return members, err
+			logrus.Debugf("Failure due to:\n%q\n", err.Error())
+			failureCounter++
+			continue
 		}
 
+		// In case of too many request, then sleep for 10 sec
 		if resp.StatusCode == 429 {
-			if lastTry {
-				return members, fmt.Errorf("%s", resp.Status)
-			}
-			logrus.Debugln(resp.Status)
+			logrus.Debugf("%s, waiting 10 seconds", resp.Status)
+			time.Sleep(10 * time.Second)
 			continue
 		} else if resp.StatusCode >= 400 {
-			return members, fmt.Errorf("%s", resp.Status)
+			logrus.Debugf("Got response code %d", resp.Status)
+			failureCounter++
+			continue
 		}
 
 		body, err := io.ReadAll(resp.Body)
 
 		if err != nil {
-			if lastTry {
-				return members, err
-			}
-			logrus.Debugln(string(body))
+			logrus.Debugf("Failure due to:\n%q\n", err.Error())
+			failureCounter++
 			continue
 		}
 
 		err = json.Unmarshal(body, &jResp)
 
 		if err != nil {
-			if lastTry {
-				return members, err
-			}
+			logrus.Debugf("Failure due to:\n%q\n", err.Error())
+			failureCounter++
 			continue
 		}
 
 		if len(jResp.Errors) > 0 {
-			if lastTry {
-				return members, fmt.Errorf("%s", strings.Join(jResp.Errors, "\n"))
-			}
+			logrus.Errorf("%s", strings.Join(jResp.Errors, "\n"))
+			failureCounter++
 			continue
 		}
 
-		if len(jResp.Members) > 0 {
+		for _, member := range jResp.Members {
+			members = append(members, member.Username)
+		}
 
-			for _, member := range jResp.Members {
-				members = append(members, member.Username)
+		// Try to identify next offset based on queries already done
+		if remainingQueries := (jResp.Meta.Total - (jResp.Meta.Offset + jResp.Meta.Limit)); remainingQueries > 0 {
+			queryOffset = jResp.Meta.Total - remainingQueries
+			if remainingQueries < queryLimit {
+				queryLimit = remainingQueries
 			}
-			break
+			logrus.Debugf("%d(remainingQueries) - %d(total) - %d(queryOffset)\n", remainingQueries, jResp.Meta.Total, queryOffset)
+		} else if remainingQueries == 0 {
+			logrus.Debugf("All members retrieved %d", len(members))
+			allQueryDone = true
+		} else {
+			logrus.Errorln("something unexpected happened")
+			failureCounter++
 		}
 
-		if lastTry {
-			return members, ErrGroupHasNoMembers
-		}
+	}
+
+	if failureCounter >= MaxQueryFailure {
+		return nil, fmt.Errorf("Failed %d times to retrieve members from group %q", MaxQueryFailure, group)
+	}
+
+	if len(members) == 0 {
+		return nil, ErrGroupHasNoMembers
 	}
 
 	return members, nil
 }
 
 // GetUserEmail retrieve the main email address for a specific user
-func (d *DiscourseClient) GetUserEmail(username string) (email string, err error) {
+func (d *DiscourseClient) GetUserEmail(username string) (string, error) {
 
 	type jsonResponse struct {
 		Email            string
@@ -140,15 +172,19 @@ func (d *DiscourseClient) GetUserEmail(username string) (email string, err error
 		Secondary_emails []string
 	}
 
+	var email string
+
 	logrus.Debugf("Fetching user %q information", username)
 
 	url := fmt.Sprintf("https://%s/u/%s/emails.json", d.Endpoint, username)
+
+	logrus.Debugln(url)
 
 	client := http.Client{}
 	req, err := http.NewRequest("GET", url, nil)
 
 	if err != nil {
-		return email, err
+		return "", err
 	}
 
 	req.Header = http.Header{
@@ -158,14 +194,13 @@ func (d *DiscourseClient) GetUserEmail(username string) (email string, err error
 		"Authorization": []string{HTTPHeaderAuthorization},
 	}
 
-	for i := 0; i < MaxQueryFailure; i++ {
-		lastTry := (i == MaxQueryFailure)
+	// Ensure we re-try multiple time a http query in case of error
+	failureCounter := 0
+	for failureCounter < MaxQueryFailure {
 		resp, err := client.Do(req)
 
 		if err != nil {
-			if lastTry {
-				return email, err
-			}
+			failureCounter++
 			logrus.Debugln(err)
 			continue
 		}
@@ -173,9 +208,7 @@ func (d *DiscourseClient) GetUserEmail(username string) (email string, err error
 		body, err := io.ReadAll(resp.Body)
 
 		if err != nil {
-			if lastTry {
-				return email, err
-			}
+			failureCounter++
 			logrus.Debugln(err)
 			continue
 		}
@@ -183,22 +216,18 @@ func (d *DiscourseClient) GetUserEmail(username string) (email string, err error
 		jsonResp := jsonResponse{}
 
 		if resp.StatusCode == 429 {
-			if lastTry {
-				return email, fmt.Errorf("%s", resp.Status)
-			}
 			logrus.Debugf("%s, waiting 10 seconds", resp.Status)
 			time.Sleep(10 * time.Second)
 			continue
 		} else if resp.StatusCode >= 400 {
-			return email, fmt.Errorf("%s", resp.Status)
+			failureCounter++
+			continue
 		}
 
 		err = json.Unmarshal(body, &jsonResp)
 
 		if err != nil {
-			if lastTry {
-				return email, err
-			}
+			failureCounter++
 			logrus.Debugln("Something went wrong while unmarshalling json")
 			logrus.Debugf("---%s\n---", string(body))
 			logrus.Debugln(err)
@@ -206,9 +235,7 @@ func (d *DiscourseClient) GetUserEmail(username string) (email string, err error
 		}
 
 		if len(jsonResp.Errors) > 0 {
-			if lastTry {
-				return "", fmt.Errorf("%s", strings.Join(jsonResp.Errors, "\n"))
-			}
+			failureCounter++
 			logrus.Debugln("Something went wrong while parsing json content")
 			logrus.Debugln(jsonResp.Errors)
 			continue
@@ -217,6 +244,7 @@ func (d *DiscourseClient) GetUserEmail(username string) (email string, err error
 		email = jsonResp.Email
 
 		if len(email) == 0 {
+			failureCounter++
 			logrus.Debugln(ErrUserHasNoEmail)
 			continue
 		}
