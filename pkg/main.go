@@ -35,10 +35,22 @@ func Execute(groupName, apiUsername, apiKey, apiEndpoint string) {
 
 	}
 
-	output := "username,email"
+	output := ""
+	fmt.Printf("%d email found for the %d members of the group %q\n", len(results), len(groupMembers), groupName)
+	// Display username,email
 	for id := range results {
 		output = output + "\n" + fmt.Sprintf("%s,%s", id, results[id])
 	}
 
-	fmt.Printf("Results:\n%v\n", output)
+	fmt.Println("====")
+	fmt.Printf("Results: username,email\n%v\n", output)
+	fmt.Println("====")
+
+	// Display email
+	for id := range results {
+		output = output + "\n" + fmt.Sprintf("%s", results[id])
+	}
+	fmt.Println("====")
+	fmt.Printf("Results: email\n%v\n", output)
+	fmt.Println("====")
 }
